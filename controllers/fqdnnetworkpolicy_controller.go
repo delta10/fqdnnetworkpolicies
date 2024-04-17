@@ -93,42 +93,6 @@ func (r *FQDNNetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	if fqdnNetworkPolicy.ObjectMeta.DeletionTimestamp.IsZero() {
-		// Our FQDNNetworkPolicy is not being deleted
-		// If it doesn't already have our finalizer set, we set it
-		if !containsString(fqdnNetworkPolicy.GetFinalizers(), finalizerName) {
-			fqdnNetworkPolicy.SetFinalizers(append(fqdnNetworkPolicy.GetFinalizers(), finalizerName))
-			if err := r.Update(context.Background(), fqdnNetworkPolicy); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-	} else {
-		// Our FQDNNetworkPolicy is being deleted
-		fqdnNetworkPolicy.Status.State = networkingv1alpha3.DestroyingState
-		fqdnNetworkPolicy.Status.Reason = "Deleting NetworkPolicy"
-		if e := r.Update(ctx, fqdnNetworkPolicy); e != nil {
-			log.Error(e, "unable to update FQDNNetworkPolicy status")
-			return ctrl.Result{}, e
-		}
-
-		if containsString(fqdnNetworkPolicy.GetFinalizers(), finalizerName) {
-			// Our finalizer is set, so we need to delete the associated NetworkPolicy
-			if err := r.deleteNetworkPolicy(ctx, fqdnNetworkPolicy); err != nil {
-				return ctrl.Result{}, err
-			}
-
-			// deletion of the NetworkPolicy went well, we remove the finalizer from the list
-			fqdnNetworkPolicy.SetFinalizers(removeString(fqdnNetworkPolicy.GetFinalizers(), finalizerName))
-			fqdnNetworkPolicy.Status.Reason = "NetworkPolicy deleted or abandonned"
-			if err := r.Update(context.Background(), fqdnNetworkPolicy); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-
-		// Stop reconciliation as the item is being deleted
-		return ctrl.Result{}, nil
-	}
-
 	// Updating the NetworkPolicy associated with our FQDNNetworkPolicy
 	// nextSyncIn represents when we should check in again on that FQDNNetworkPolicy.
 	// It's probably related to the TTL of the DNS records.

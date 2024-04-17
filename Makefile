@@ -7,9 +7,6 @@ ENVTEST_K8S_VERSION = 1.28.3
 CRD_OPTIONS ?= "crd:trivialVersions=true"
 SKIP_TEST ?= false
 
-# Cert-manager
-CERT_MANAGER_VERSION = "v1.12.3"
-
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -145,10 +142,6 @@ kind-cluster: ## Create a cluster with kind.
 .PHONY: kind-load-image
 kind-load-image: ## Load the manager image into the cluster.
 	kind load docker-image ${IMG} --name fqdn-tests
-
-.PHONY: deploy-cert-manager
-deploy-cert-manager: ## Deploy cert-manager into the cluster.
-	kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml
 
 .PHONY: force-deploy-manager
 force-deploy-manager: docker-build kind-load-image deploy

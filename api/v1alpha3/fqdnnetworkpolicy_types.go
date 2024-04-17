@@ -32,8 +32,6 @@ const (
 	PendingState State = "Pending"
 	// ActiveState is the state of the FQDNNetworkPolicy when the associated NetworkPolicy is created
 	ActiveState State = "Active"
-	// DestroyingState is the state of the FQDNNetworkPolicy when it's being destroyed
-	DestroyingState State = "Destroying"
 )
 
 // FQDNNetworkPolicySpec defines the desired state of FQDNNetworkPolicy
