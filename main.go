@@ -33,8 +33,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	networkingv1alpha3 "github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/api/v1alpha3"
-	"github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang/controllers"
+	networkingv1alpha4 "github.com/delta10/fqdnnetworkpolicies/api/v1alpha4"
+	"github.com/delta10/fqdnnetworkpolicies/controllers"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -46,7 +46,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(networkingv1alpha3.AddToScheme(scheme))
+	utilruntime.Must(networkingv1alpha4.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -79,7 +79,7 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "25219b68.gke.io",
+		LeaderElectionID:       "25219b68.delta10.nl",
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port: 9443,
 		}),
@@ -112,10 +112,6 @@ func main() {
 		Config: cfg,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "FQDNNetworkPolicy")
-		os.Exit(1)
-	}
-	if err = (&networkingv1alpha3.FQDNNetworkPolicy{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "FQDNNetworkPolicy")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

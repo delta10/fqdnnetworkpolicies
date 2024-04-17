@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1alpha3 contains API Schema definitions for the networking v1alpha3 API group
 // +kubebuilder:object:generate=true
-// +groupName=networking.gke.io
+// +groupName=networking.delta10.nl
 package v1alpha4
 
 import (

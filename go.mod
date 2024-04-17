@@ -1,4 +1,4 @@
-module github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang
+module github.com/delta10/fqdnnetworkpolicies
 
 go 1.22
 
