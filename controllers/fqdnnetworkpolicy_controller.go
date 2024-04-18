@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	networkingv1alpha4 "github.com/delta10/fqdnnetworkpolicies/api/v1alpha4"
@@ -49,10 +49,8 @@ type Config struct {
 }
 
 var (
-	ownerAnnotation        = "fqdnnetworkpolicies.networking.gke.io/owned-by"
-	deletePolicyAnnotation = "fqdnnetworkpolicies.networking.gke.io/delete-policy"
-	aaaaLookupsAnnotation  = "fqdnnetworkpolicies.networking.gke.io/aaaa-lookups"
-	finalizerName          = "finalizer.fqdnnetworkpolicies.networking.gke.io"
+	aaaaLookupsAnnotation = "fqdnnetworkpolicies.networking.gke.io/aaaa-lookups"
+	finalizerName         = "finalizer.fqdnnetworkpolicies.networking.gke.io"
 	// TODO make retry configurable
 	retry = time.Second * time.Duration(10)
 )
@@ -166,21 +164,16 @@ func (r *FQDNNetworkPolicyReconciler) updateNetworkPolicy(ctx context.Context,
 		log.V(2).Info("Found NetworkPolicy")
 	}
 
-	// If we have found a NetworkPolicy, but it doesn't have the right annotation
-	// it means that it was created manually beforehand, and we don't want to touch it.
-	// This also means that you can have a FQDNNetworkPolicy "adopt" a NetworkPolicy of the
-	// same name by adding the correct annotation.
-	if !toCreate && networkPolicy.Annotations[ownerAnnotation] != fqdnNetworkPolicy.Name {
-		return nil, errors.New("NetworkPolicy missing owned-by annotation or owned by a different resource")
-	}
-
 	// Updating NetworkPolicy
 	networkPolicy.Name = fqdnNetworkPolicy.Name
 	networkPolicy.Namespace = fqdnNetworkPolicy.Namespace
+	// Set ownerReference. This will faill if the NP is already owned by another controller
+	if err := controllerutil.SetControllerReference(fqdnNetworkPolicy, networkPolicy, r.Scheme); err != nil {
+		return nil, err
+	}
 	if networkPolicy.Annotations == nil {
 		networkPolicy.Annotations = make(map[string]string)
 	}
-	networkPolicy.Annotations[ownerAnnotation] = fqdnNetworkPolicy.Name
 	networkPolicy.Spec.PodSelector = fqdnNetworkPolicy.Spec.PodSelector
 	networkPolicy.Spec.PolicyTypes = fqdnNetworkPolicy.Spec.PolicyTypes
 	// egress rules
@@ -214,40 +207,6 @@ func (r *FQDNNetworkPolicyReconciler) updateNetworkPolicy(ctx context.Context,
 	}
 
 	return nextSync, nil
-}
-
-// deleteNetworkPolicy deletes the NetworkPolicy associated with the fqdnNetworkPolicy FQDNNetworkPolicy
-func (r *FQDNNetworkPolicyReconciler) deleteNetworkPolicy(ctx context.Context,
-	fqdnNetworkPolicy *networkingv1alpha4.FQDNNetworkPolicy) error {
-	log := r.Log.WithValues("fqdnnetworkpolicy", fqdnNetworkPolicy.Namespace+"/"+fqdnNetworkPolicy.Name)
-
-	// Trying to fetch an existing NetworkPolicy of the same name as our FQDNNetworkPolicy
-	networkPolicy := &networking.NetworkPolicy{}
-	if err := r.Get(ctx, client.ObjectKey{
-		Namespace: fqdnNetworkPolicy.Namespace,
-		Name:      fqdnNetworkPolicy.Name,
-	}, networkPolicy); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			// If there is none, that's weird, but that's what we want
-			log.Info("associated NetworkPolicy doesn't exist")
-			return nil
-		}
-		return err
-	}
-	if networkPolicy.Annotations[deletePolicyAnnotation] == "abandon" {
-		log.Info("NetworkPolicy has delete policy set to abandon, not deleting")
-		return nil
-	}
-	if networkPolicy.Annotations[ownerAnnotation] != fqdnNetworkPolicy.Name {
-		log.Info("NetworkPolicy is not owned by FQDNNetworkPolicy, not deleting")
-		return nil
-	}
-	if err := r.Delete(ctx, networkPolicy); err != nil {
-		log.Error(err, "unable to delete the NetworkPolicy")
-		return err
-	}
-	log.Info("NetworkPolicy deleted")
-	return nil
 }
 
 // getNetworkPolicyIngressRules returns a slice of NetworkPolicyIngressRules based on the

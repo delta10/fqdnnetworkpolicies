@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -109,6 +110,21 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					if err != nil {
 						return err
 					}
+					tr := true
+					expectedOwnerReference := metav1.OwnerReference{
+						Kind:               "FQDNNetworkPolicy",
+						APIVersion:         networkingv1alpha4.GroupVersion.Group + "/" + networkingv1alpha4.GroupVersion.Version,
+						UID:                fqdnNetworkPolicy.ObjectMeta.UID,
+						Name:               fqdnNetworkPolicy.Name,
+						Controller:         &tr,
+						BlockOwnerDeletion: &tr,
+					}
+					if len(networkPolicy.OwnerReferences) != 1 {
+						return errors.New("Unexpected number of ownerReferences in NetworkPolicy")
+					}
+					if !reflect.DeepEqual(networkPolicy.OwnerReferences[0], expectedOwnerReference) {
+						return errors.New("Unexpected ownerReference in NetworkPolicy")
+					}
 					if len(networkPolicy.Spec.PolicyTypes) != 1 ||
 						networkPolicy.Spec.PolicyTypes[0] != networking.PolicyTypeEgress {
 						return errors.New("Unexpected PolicyType: " + fmt.Sprintf("%v", networkPolicy.Spec.PolicyTypes) +
@@ -132,13 +148,6 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					}
 					return nil
 				}).Should(Succeed())
-			})
-			It("Should delete the NetworkPolicy when it's deleted", func() {
-				Expect(k8sClient.Delete(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				Eventually(func() error {
-					networkPolicy := networking.NetworkPolicy{}
-					return k8sClient.Get(ctx, nn, &networkPolicy)
-				}).ShouldNot(Succeed())
 			})
 		})
 		Context("with an Ingress policy", func() {
@@ -230,13 +239,6 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					return nil
 				}).Should(Succeed())
 			})
-			It("Should delete the NetworkPolicy when it's deleted", func() {
-				Expect(k8sClient.Delete(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				Eventually(func() error {
-					networkPolicy := networking.NetworkPolicy{}
-					return k8sClient.Get(ctx, nn, &networkPolicy)
-				}).ShouldNot(Succeed())
-			})
 		})
 		Context("with a non-existent FQDN", func() {
 			ctx := context.Background()
@@ -260,18 +262,22 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					return nil
 				}).Should(Succeed())
 			})
-			It("Should delete the NetworkPolicy when it's deleted", func() {
-				Expect(k8sClient.Delete(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				Eventually(func() error {
-					networkPolicy := networking.NetworkPolicy{}
-					return k8sClient.Get(ctx, nn, &networkPolicy)
-				}).ShouldNot(Succeed())
-			})
 		})
-		Context("when a conflicting NetworkPolicy already exists", func() {
+		Context("when a NetworkPolicy with a conflicting controller ownerReference already exists", func() {
 			ctx := context.Background()
 			fqdnNetworkPolicy := getFQDNNetworkPolicy("context2", "default")
 			networkPolicy := getNetworkPolicy(fqdnNetworkPolicy.Name, fqdnNetworkPolicy.Namespace)
+			tr := true
+			networkPolicy.OwnerReferences = append(
+				networkPolicy.OwnerReferences,
+				metav1.OwnerReference{
+					Kind:       "test",
+					Name:       "test",
+					UID:        "test",
+					APIVersion: "test/v1",
+					Controller: &tr,
+				},
+			)
 			nn := types.NamespacedName{
 				Namespace: fqdnNetworkPolicy.Namespace,
 				Name:      fqdnNetworkPolicy.Name,
@@ -287,19 +293,11 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 						"Reason: " + string(fqdnNetworkPolicy.Status.Reason))
 				}
 			})
-			It("Shouldn't delete the existing NetworkPolicy when it gets deleted", func() {
-				Expect(k8sClient.Delete(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				time.Sleep(TIMEOUT)
-				Expect(k8sClient.Get(ctx, nn, &networkPolicy)).Should(Succeed())
-				Expect(k8sClient.Delete(ctx, &networkPolicy)).Should(Succeed())
-			})
 		})
-		Context("when a conflicting NetworkPolicy with the owned-by annotation already exists", func() {
+		Context("when a NetworkPolicy with no controller ownerReference already exists", func() {
 			ctx := context.Background()
 			fqdnNetworkPolicy := getFQDNNetworkPolicy("context3", "default")
 			networkPolicy := getNetworkPolicy(fqdnNetworkPolicy.Name, fqdnNetworkPolicy.Namespace)
-			networkPolicy.Annotations = make(map[string]string)
-			networkPolicy.Annotations[ownerAnnotation] = fqdnNetworkPolicy.Name
 			nn := types.NamespacedName{
 				Namespace: fqdnNetworkPolicy.Namespace,
 				Name:      fqdnNetworkPolicy.Name,
@@ -314,40 +312,6 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 						"State: " + string(fqdnNetworkPolicy.Status.State) + ", " +
 						"Reason: " + string(fqdnNetworkPolicy.Status.Reason))
 				}
-			})
-			It("Should delete the existing NetworkPolicy when it gets deleted", func() {
-				Expect(k8sClient.Delete(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				Eventually(func() error {
-					networkPolicy := networking.NetworkPolicy{}
-					return k8sClient.Get(ctx, nn, &networkPolicy)
-				}).ShouldNot(Succeed())
-			})
-		})
-		Context("when the NetworkPolicy has the abandon delete-policy", func() {
-			ctx := context.Background()
-			fqdnNetworkPolicy := getFQDNNetworkPolicy("context4", "default")
-			nn := types.NamespacedName{
-				Namespace: fqdnNetworkPolicy.Namespace,
-				Name:      fqdnNetworkPolicy.Name,
-			}
-			It("Shouldn't delete the NetworkPolicy when it gets deleted", func() {
-				Expect(k8sClient.Create(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				Eventually(func() error {
-					networkPolicy := networking.NetworkPolicy{}
-					return k8sClient.Get(ctx, nn, &networkPolicy)
-				}).Should(Succeed())
-
-				// adding abandon delete-policy to NetworkPolicy
-				networkPolicy := networking.NetworkPolicy{}
-				k8sClient.Get(ctx, nn, &networkPolicy)
-				networkPolicy.Annotations[deletePolicyAnnotation] = "abandon"
-				Expect(k8sClient.Update(ctx, &networkPolicy)).Should(Succeed())
-
-				// deleting the FQDNNetworkPolicy
-				Expect(k8sClient.Delete(ctx, &fqdnNetworkPolicy)).Should(Succeed())
-				time.Sleep(TIMEOUT)
-				Expect(k8sClient.Get(ctx, nn, &networkPolicy)).Should(Succeed())
-				Expect(k8sClient.Delete(ctx, &networkPolicy)).Should(Succeed())
 			})
 		})
 		Context("when the NetworkPolicy has the aaaa-lookups annotation set to skip", func() {
