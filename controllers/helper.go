@@ -18,6 +18,7 @@ package controllers
 
 import (
 	networkingv1alpha4 "github.com/delta10/fqdnnetworkpolicies/api/v1alpha4"
+	networking "k8s.io/api/networking/v1"
 )
 
 // Helper function to check string exists in a slice of strings.
@@ -71,6 +72,18 @@ func mergeCaches(caches ...map[string]*networkingv1alpha4.DomainCache) (mergedCa
 					mergedCache[fqdn].IPExpiration[ip] = expires
 				}
 			}
+		}
+	}
+	return
+}
+
+func removeDuplicatePeers(peers []networking.NetworkPolicyPeer) (newPeers []networking.NetworkPolicyPeer) {
+	ipMap := make(map[string]bool)
+	for _, peer := range peers {
+		ip := peer.IPBlock.CIDR
+		if _, exists := ipMap[ip]; !exists {
+			ipMap[ip] = true
+			newPeers = append(newPeers, peer)
 		}
 	}
 	return

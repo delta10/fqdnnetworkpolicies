@@ -77,6 +77,7 @@ var (
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.1/pkg/reconcile
 func (r *FQDNNetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	startTime := time.Now()
 	_ = log.FromContext(ctx)
 	log := r.Log.WithValues("fqdnnetworkpolicy", req.NamespacedName)
 
@@ -97,7 +98,7 @@ func (r *FQDNNetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if fqdnNetworkPolicy.Status.NextSyncTime != nil && fqdnNetworkPolicy.Status.NextSyncTime.After(time.Now()) {
-		log.Info("FQDNNetworkPolicy not due for resync")
+		log.V(1).Info("FQDNNetworkPolicy not due for resync")
 		nextSyncIn := fqdnNetworkPolicy.Status.NextSyncTime.Sub(time.Now())
 		return ctrl.Result{RequeueAfter: nextSyncIn}, nil
 	}
@@ -118,8 +119,6 @@ func (r *FQDNNetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{RequeueAfter: retry}, nil
 	}
-	nextSyncIn := nextSyncTime.Sub(time.Now())
-	log.Info("NetworkPolicy updated, next sync in " + fmt.Sprint(nextSyncIn))
 
 	// Need to fetch the object again before updating it
 	// as its status may have changed since the first time
@@ -144,6 +143,8 @@ func (r *FQDNNetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	nextSyncIn := nextSyncTime.Sub(time.Now())
+	log.Info("NetworkPolicy updated", "nextSyncIn", fmt.Sprint(nextSyncIn), "reconciliation duration", time.Since(startTime).String())
 	return ctrl.Result{RequeueAfter: nextSyncIn}, nil
 }
 
@@ -261,7 +262,7 @@ func (r *FQDNNetworkPolicyReconciler) getNetworkPolicyIngressRules(ctx context.C
 				for _, to := range frule.From {
 					for _, f := range to.FQDNs {
 						var domainResults []networking.NetworkPolicyPeer
-						domainResults, caches[n][f] = r.resolveRule(conn, fqdnNetworkPolicy, f)
+						domainResults, caches[n][f] = r.resolveDomain(conn, fqdnNetworkPolicy, f)
 						results[n] = append(results[n], domainResults...)
 					}
 				}
@@ -270,6 +271,7 @@ func (r *FQDNNetworkPolicyReconciler) getNetworkPolicyIngressRules(ctx context.C
 		wg.Wait()
 
 		peers := flatten(results)
+		peers = removeDuplicatePeers(peers)
 		for _, cc := range caches {
 			for _, cache := range cc {
 				if cache.NextUpdateTime.Before(&nextSync) {
@@ -320,7 +322,7 @@ func (r *FQDNNetworkPolicyReconciler) getNetworkPolicyEgressRules(ctx context.Co
 				for _, to := range frule.To {
 					for _, f := range to.FQDNs {
 						var domainResults []networking.NetworkPolicyPeer
-						domainResults, caches[n][f] = r.resolveRule(conn, fqdnNetworkPolicy, f)
+						domainResults, caches[n][f] = r.resolveDomain(conn, fqdnNetworkPolicy, f)
 						results[n] = append(results[n], domainResults...)
 					}
 				}
@@ -329,6 +331,7 @@ func (r *FQDNNetworkPolicyReconciler) getNetworkPolicyEgressRules(ctx context.Co
 		wg.Wait()
 
 		peers := flatten(results)
+		peers = removeDuplicatePeers(peers)
 		for _, cc := range caches {
 			for _, cache := range cc {
 				if cache.NextUpdateTime.Before(&nextSync) {
@@ -380,7 +383,7 @@ func closeDNSConns(conns []*dns.Conn) (err error) {
 	return err
 }
 
-func (r *FQDNNetworkPolicyReconciler) resolveRule(conn *dns.Conn, fqdnNetworkPolicy *networkingv1alpha4.FQDNNetworkPolicy, fqdn string) (peers []networking.NetworkPolicyPeer, cache *networkingv1alpha4.DomainCache) {
+func (r *FQDNNetworkPolicyReconciler) resolveDomain(conn *dns.Conn, fqdnNetworkPolicy *networkingv1alpha4.FQDNNetworkPolicy, fqdn string) (peers []networking.NetworkPolicyPeer, cache *networkingv1alpha4.DomainCache) {
 	log := r.Log.WithValues("fqdnnetworkpolicy", fqdnNetworkPolicy.Namespace+"/"+fqdnNetworkPolicy.Name)
 	conn.SetDeadline(time.Now().Add(time.Second*time.Duration(r.Config.DNSConfig.Timeout)))
 	nextSync := r.Config.MaxRequeueTime
@@ -436,9 +439,6 @@ func (r *FQDNNetworkPolicyReconciler) resolveRule(conn *dns.Conn, fqdnNetworkPol
 			// just after the TTL of the DNS record has expired.
 			if ans.Header().Ttl < nextSync {
 				nextSync = ans.Header().Ttl
-				if nextSync == 0 {
-					log.Info("WARNING: received TTL of zero", "domain", fqdn)
-				}
 			}
 			cache.IPExpiration[cidr] = metav1.NewTime(time.Now().Add(r.Config.IPExpiration))
 		}
@@ -488,9 +488,9 @@ func (r *FQDNNetworkPolicyReconciler) resolveRule(conn *dns.Conn, fqdnNetworkPol
 		}
 	}
 
-	// Domain should be updated again 0.5 second after the lowest TTL expires
+	// Domain should be updated again shortly after the lowest TTL expires
 	cache.NextUpdateTime = metav1.NewTime(
-		time.Now().Add(time.Second * time.Duration(nextSync)).Add(time.Millisecond * time.Duration(500)),
+		time.Now().Add(time.Second * time.Duration(nextSync) + time.Millisecond * time.Duration(800)),
 	)
 
 	return peers, cache
