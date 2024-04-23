@@ -25,3 +25,6 @@ bin
 
 # Personal environment variables
 my.env
+
+gke-fqdnnetworkpolicies-golang
+fqdnnetworkpolicies

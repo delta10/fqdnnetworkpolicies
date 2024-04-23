@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gexec"
@@ -79,10 +80,21 @@ var _ = BeforeSuite(func(done Done) {
 	})
 	Expect(err).ToNot(HaveOccurred())
 
+	dnsConfig, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+	controllerConfig := Config{
+		IPExpiration:   time.Hour,
+		MaxRequeueTime: 3600,
+		DNSProtocol:    "udp",
+		DNSEnvironment: "resolv.conf",
+		DNSService:     "kube-dns",
+		DNSConfig:      dnsConfig,
+	}
+
 	err = (&FQDNNetworkPolicyReconciler{
 		Client: k8sManager.GetClient(),
 		Scheme: k8sManager.GetScheme(),
 		Log:    ctrl.Log.WithName("controllers").WithName("FQDNNetworkPolicy"),
+		Config: controllerConfig,
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 

@@ -47,11 +47,11 @@ type FQDNNetworkPolicyStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	State        State                  `json:"state"`
-	Reason       string                 `json:"reason,omitempty"`
-	LastSyncTime *metav1.Time           `json:"lastSyncTime,omitempty"`
-	NextSyncTime *metav1.Time           `json:"nextSyncTime,omitempty"`
-	Cache        map[string]DomainCache `json:"cache,omitempty"`
+	State        State                   `json:"state"`
+	Reason       string                  `json:"reason,omitempty"`
+	LastSyncTime *metav1.Time            `json:"lastSyncTime,omitempty"`
+	NextSyncTime *metav1.Time            `json:"nextSyncTime,omitempty"`
+	Cache        map[string]*DomainCache `json:"cache,omitempty"`
 }
 
 //+kubebuilder:object:root=true

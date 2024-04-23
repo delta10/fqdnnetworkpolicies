@@ -235,9 +235,18 @@ func (in *FQDNNetworkPolicyStatus) DeepCopyInto(out *FQDNNetworkPolicyStatus) {
 	}
 	if in.Cache != nil {
 		in, out := &in.Cache, &out.Cache
-		*out = make(map[string]DomainCache, len(*in))
+		*out = make(map[string]*DomainCache, len(*in))
 		for key, val := range *in {
-			(*out)[key] = *val.DeepCopy()
+			var outVal *DomainCache
+			if val == nil {
+				(*out)[key] = nil
+			} else {
+				inVal := (*in)[key]
+				in, out := &inVal, &outVal
+				*out = new(DomainCache)
+				(*in).DeepCopyInto(*out)
+			}
+			(*out)[key] = outVal
 		}
 	}
 }

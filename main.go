@@ -19,11 +19,13 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/miekg/dns"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -56,17 +58,25 @@ func main() {
 	var probeAddr string
 	var skipAAAA bool
 	var nextSyncPeriod int
+	var dnsEnvironment string
+	var dnsConfigFile string
+	var dnsTCP bool
+	var dnsServiceName string
+	var ipExpirationPeriod string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&skipAAAA, "skip-aaaa", false, "Skip AAAA lookups")
-	flag.IntVar(&nextSyncPeriod, "next-sync-period", 30, "Highest value possible for the re-sync time on the FQDNNetworkPolicy, respecting the DNS TTL.")
+	flag.IntVar(&nextSyncPeriod, "next-sync-period", 3600, "Highest value possible for the re-sync time on the FQDNNetworkPolicy, respecting the DNS TTL.")
+	flag.StringVar(&dnsEnvironment, "dns-environment", "kubernetes", "specify 'kubernetes' to configure DNS via a Kubernetes service or 'resolv.conf' to use a configuration file.")
+	flag.StringVar(&dnsConfigFile, "dns-config-file", "/etc/resolv.conf", "Path to the DNS configuration file.")
+	flag.BoolVar(&dnsTCP, "dns-tcp", false, "Use DNS over TCP instead of UDP.")
+	flag.StringVar(&dnsServiceName, "dns-service-name", "kube-dns", "Upstream DNS service in kube-dns namespace (requires --dns-environment=kubernetes)")
+	flag.StringVar(&ipExpirationPeriod, "ip-expiration-period", "60m", "Minimumum duration to keep resolved IPs in a NetworkPolicy")
 
-	opts := zap.Options{
-		Development: true,
-	}
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
@@ -100,9 +110,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	protocol := "udp"
+	if dnsTCP {
+		protocol = "tcp"
+	}
+	ipExpiration, err := time.ParseDuration(ipExpirationPeriod)
+	if err != nil {
+		setupLog.Error(err, "unable to parse ip-expiration-period")
+		os.Exit(1)
+	}
+	dnsConfig := new(dns.ClientConfig)
+	dnsConfig.Timeout = 2
+	if dnsEnvironment == "kubernetes" {
+		dnsConfig.Port = "53"
+		// We add the servers at the beginning of every Reconcile
+	} else {
+		dnsConfig, err = dns.ClientConfigFromFile(dnsConfigFile)
+		if err != nil {
+			setupLog.Error(err, "unable to import dns config file", "path", dnsConfigFile)
+		}
+	}
 	cfg := controllers.Config{
 		SkipAAAA:       skipAAAA,
-		NextSyncPeriod: nextSyncPeriod,
+		MaxRequeueTime: uint32(nextSyncPeriod),
+		IPExpiration:   ipExpiration,
+		DNSProtocol:    protocol,
+		DNSEnvironment: dnsEnvironment,
+		DNSService:     dnsServiceName,
+		DNSConfig:      dnsConfig,
 	}
 
 	if err = (&controllers.FQDNNetworkPolicyReconciler{

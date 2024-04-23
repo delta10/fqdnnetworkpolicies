@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"reflect"
 	"testing"
 	"time"
 
@@ -119,12 +118,7 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 						Controller:         &tr,
 						BlockOwnerDeletion: &tr,
 					}
-					if len(networkPolicy.OwnerReferences) != 1 {
-						return errors.New("Unexpected number of ownerReferences in NetworkPolicy")
-					}
-					if !reflect.DeepEqual(networkPolicy.OwnerReferences[0], expectedOwnerReference) {
-						return errors.New("Unexpected ownerReference in NetworkPolicy")
-					}
+					Expect(networkPolicy.OwnerReferences).To(ContainElement(expectedOwnerReference))
 					if len(networkPolicy.Spec.PolicyTypes) != 1 ||
 						networkPolicy.Spec.PolicyTypes[0] != networking.PolicyTypeEgress {
 						return errors.New("Unexpected PolicyType: " + fmt.Sprintf("%v", networkPolicy.Spec.PolicyTypes) +
@@ -306,6 +300,18 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 				Expect(k8sClient.Create(ctx, &networkPolicy)).Should(Succeed())
 				Expect(k8sClient.Create(ctx, &fqdnNetworkPolicy)).Should(Succeed())
 				time.Sleep(TIMEOUT)
+				networkPolicy := networking.NetworkPolicy{}
+				Expect(k8sClient.Get(ctx, nn, &networkPolicy)).Should(Succeed())
+				tr := true
+				expectedOwnerReference := metav1.OwnerReference{
+					Kind:               "FQDNNetworkPolicy",
+					APIVersion:         networkingv1alpha4.GroupVersion.Group + "/" + networkingv1alpha4.GroupVersion.Version,
+					UID:                fqdnNetworkPolicy.ObjectMeta.UID,
+					Name:               fqdnNetworkPolicy.Name,
+					Controller:         &tr,
+					BlockOwnerDeletion: &tr,
+				}
+				Expect(networkPolicy.OwnerReferences).To(ContainElement(expectedOwnerReference))
 				Expect(k8sClient.Get(ctx, nn, &fqdnNetworkPolicy)).Should(Succeed())
 				if fqdnNetworkPolicy.Status.State != networkingv1alpha4.ActiveState {
 					Fail("FQDNNetworkPolicy should be in active state. " +
