@@ -1,0 +1,2 @@
+release-name-template: "chart-{{ .Version }}"
+release-notes-file: helm/chart-release-notes.md
