@@ -19,6 +19,7 @@ spec:
     metadata:
       labels:
         control-plane: controller-manager
+        k8s-cache.coredns.io/early-refresh: "true"
         {{- include "fqdn-policy.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: fqdn-policy
@@ -28,9 +29,7 @@ spec:
         - args:
             - --metrics-bind-address=127.0.0.1:8080
             - --leader-elect
-            - --zap-log-level=error
-            - --skip-aaaa
-            - --next-sync-period=60
+            {{- toYaml .Values.manager.extraArgs | nindent 12 }}
           command:
             - /manager
           env:
