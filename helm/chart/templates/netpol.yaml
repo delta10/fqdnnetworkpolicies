@@ -8,6 +8,12 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   egress: 
   - ports:
+    - port: 443
+      protocl: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  - ports:
     - port: 53
       protocol: UDP
     - port: 53

@@ -11,7 +11,7 @@ containerSecurityContext:
 
 image:
   repository: "ghcr.io/delta10/fqdnnetworkpolicies/controller"
-  tag: "0.4"
+  tag: "0.4.0"
 
 manager:
   extraArgs:

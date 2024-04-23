@@ -6,6 +6,14 @@ metadata:
   name: fqdnnetworkpolicies-manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - networking.delta10.nl
   resources:
   - fqdnnetworkpolicies
