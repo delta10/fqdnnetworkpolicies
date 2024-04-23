@@ -4,5 +4,5 @@ sources:
   - https://github.com/delta10/fqdnnetworkpolicies/tree/main/charts
 description:  Stable FQDNNetworkPolicies let you create Kubernetes Network Policies based on Fully Qualified Domain Names (FQDNs) 
 type: application
-version: 0.0.8
+version: 0.0.9
 appVersion: "0.4.0"
