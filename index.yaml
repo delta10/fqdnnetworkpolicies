@@ -3,6 +3,19 @@ entries:
   fqdnnetworkpolicies:
   - apiVersion: v2
     appVersion: 0.4.0
+    created: "2024-04-23T18:15:34.245906853Z"
+    description: Stable FQDNNetworkPolicies let you create Kubernetes Network Policies
+      based on Fully Qualified Domain Names (FQDNs)
+    digest: 004eb0bd148adecd2d133d8311d132d08c97e49466f2f960ca5375235269d9b2
+    name: fqdnnetworkpolicies
+    sources:
+    - https://github.com/delta10/fqdnnetworkpolicies/tree/main/charts
+    type: application
+    urls:
+    - https://github.com/delta10/fqdnnetworkpolicies/releases/download/chart-0.0.11/fqdnnetworkpolicies-0.0.11.tgz
+    version: 0.0.11
+  - apiVersion: v2
+    appVersion: 0.4.0
     created: "2024-04-23T17:59:56.130989174Z"
     description: Stable FQDNNetworkPolicies let you create Kubernetes Network Policies
       based on Fully Qualified Domain Names (FQDNs)
@@ -27,4 +40,4 @@ entries:
     urls:
     - https://github.com/delta10/fqdnnetworkpolicies/releases/download/chart-0.0.9/fqdnnetworkpolicies-0.0.9.tgz
     version: 0.0.9
-generated: "2024-04-23T17:59:56.131001306Z"
+generated: "2024-04-23T18:15:34.245928123Z"
