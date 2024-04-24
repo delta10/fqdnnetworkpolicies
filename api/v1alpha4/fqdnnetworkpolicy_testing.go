@@ -17,8 +17,8 @@ limitations under the License.
 package v1alpha4
 
 import (
-	"io/ioutil"
 	"log"
+	"os"
 	"runtime"
 	"strings"
 
@@ -31,7 +31,7 @@ func (r *FQDNNetworkPolicy) LoadResource(path string) *FQDNNetworkPolicy {
 	_, filename, _, _ := runtime.Caller(0)
 	pSlice := strings.Split(filename, "/")
 	projectRoot := strings.Join(pSlice[:len(pSlice)-3], "/")
-	yamlFile, err := ioutil.ReadFile(projectRoot + "/" + path)
+	yamlFile, err := os.ReadFile(projectRoot + "/" + path)
 	if err != nil {
 		log.Printf("yamlFile.Get err   #%v ", err)
 	}

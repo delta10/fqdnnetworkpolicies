@@ -367,7 +367,7 @@ func (r *FQDNNetworkPolicyReconciler) getDNSConns(ctx context.Context) (conns []
 		return nil, fmt.Errorf("no DNS configuration found")
 	}
 	for _, server := range config.Servers {
-		conn, err := c.DialContext(ctx, server + ":" + config.Port)
+		conn, err := c.DialContext(ctx, server+":"+config.Port)
 		if err != nil {
 			return conns, err
 		}
@@ -385,11 +385,11 @@ func closeDNSConns(conns []*dns.Conn) (err error) {
 
 func (r *FQDNNetworkPolicyReconciler) resolveDomain(conn *dns.Conn, fqdnNetworkPolicy *networkingv1alpha4.FQDNNetworkPolicy, fqdn string) (peers []networking.NetworkPolicyPeer, cache *networkingv1alpha4.DomainCache) {
 	log := r.Log.WithValues("fqdnnetworkpolicy", fqdnNetworkPolicy.Namespace+"/"+fqdnNetworkPolicy.Name)
-	conn.SetDeadline(time.Now().Add(time.Second*time.Duration(r.Config.DNSConfig.Timeout)))
+	conn.SetDeadline(time.Now().Add(time.Second * time.Duration(r.Config.DNSConfig.Timeout)))
 	nextSync := r.Config.MaxRequeueTime
 	f := fqdn
 	cache = &networkingv1alpha4.DomainCache{
-		IPExpiration: make(map[string]metav1.Time),
+		IPExpiration:   make(map[string]metav1.Time),
 		NextUpdateTime: metav1.NewTime(time.Now().Add(time.Second * time.Duration(nextSync))),
 	}
 	oldCache, oldCacheExists := fqdnNetworkPolicy.Status.Cache[f]
@@ -490,7 +490,7 @@ func (r *FQDNNetworkPolicyReconciler) resolveDomain(conn *dns.Conn, fqdnNetworkP
 
 	// Domain should be updated again shortly after the lowest TTL expires
 	cache.NextUpdateTime = metav1.NewTime(
-		time.Now().Add(time.Second * time.Duration(nextSync) + time.Millisecond * time.Duration(800)),
+		time.Now().Add(time.Second*time.Duration(nextSync) + time.Millisecond*time.Duration(800)),
 	)
 
 	return peers, cache

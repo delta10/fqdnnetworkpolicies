@@ -48,12 +48,13 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 	Describe("Creating a FQDNNetworkPolicy", func() {
 		Context("when the NetworkPolicy doesn't exist beforehand", func() {
 			ctx := context.Background()
-			fqdnNetworkPolicy := getFQDNNetworkPolicy("context1", "default")
-			nn := types.NamespacedName{
-				Namespace: fqdnNetworkPolicy.Namespace,
-				Name:      fqdnNetworkPolicy.Name,
-			}
 			It("Should create a NetworkPolicy of the same name with the correct CIDRs", func() {
+				fqdnNetworkPolicy := getFQDNNetworkPolicy("context1", "default")
+				nn := types.NamespacedName{
+					Namespace: fqdnNetworkPolicy.Namespace,
+					Name:      fqdnNetworkPolicy.Name,
+				}
+				now := time.Now()
 				Expect(k8sClient.Create(ctx, &fqdnNetworkPolicy)).Should(Succeed())
 				Eventually(func() error {
 					r := net.Resolver{}
@@ -103,9 +104,13 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 							}
 						}
 					}
-					// Getting the NetworkPolicy
+					// Getting the NetworkPolicy and updated FQDNNetworkPolicy
+					err := k8sClient.Get(ctx, nn, &fqdnNetworkPolicy)
+					if err != nil {
+						return err
+					}
 					networkPolicy := networking.NetworkPolicy{}
-					err := k8sClient.Get(ctx, nn, &networkPolicy)
+					err = k8sClient.Get(ctx, nn, &networkPolicy)
 					if err != nil {
 						return err
 					}
@@ -130,7 +135,6 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 						// is in the expect list of IPs
 						total += len(egressRule.To)
 						for _, to := range egressRule.To {
-							// removing the /32 at the end of the CIDR
 							if !containsString(expectedIPs, string(to.IPBlock.CIDR)) {
 								return errors.New("Unexpected IP in NetworkPolicy: " + string(to.IPBlock.CIDR) +
 									". Expected IPs: " + fmt.Sprint(expectedIPs))
@@ -139,6 +143,23 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					}
 					if total != len(expectedIPs) {
 						return errors.New("Some expected IPs are not present in the NetworkPolicy")
+					}
+					total = 0
+					for _, dc := range fqdnNetworkPolicy.Status.Cache {
+						for ip, expires := range dc.IPExpiration {
+							total += 1
+							if !containsString(expectedIPs, ip) {
+								return errors.New("Unexpected IP in FQDNNetworkPolicy Cache: " + ip +
+									". Expected IPs: " + fmt.Sprint(expectedIPs))
+							}
+							expiresIn := expires.Sub(now)
+							if (expiresIn - time.Hour).Abs() > time.Second*time.Duration(5) {
+								return fmt.Errorf("Unexpected IP expiration time: expected 1h; got %v", expiresIn)
+							}
+						}
+					}
+					if total != len(expectedIPs) {
+						return errors.New("Some expected IPs are not present in the FQDNNetworkPolicy Cache")
 					}
 					return nil
 				}).Should(Succeed())
@@ -155,6 +176,7 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 			}
 			It("Should create a NetworkPolicy of the same name with an Ingress rule with the correct CIDRs", func() {
 				Expect(k8sClient.Create(ctx, &fqdnNetworkPolicy)).Should(Succeed())
+				now := time.Now()
 				Eventually(func() error {
 					r := net.Resolver{}
 					// computing the expected IPs in the NetworkPolicy
@@ -203,9 +225,13 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 							}
 						}
 					}
-					// Getting the NetworkPolicy
+					// Getting the NetworkPolicy and updated FQDNNetworkPolicy
+					err := k8sClient.Get(ctx, nn, &fqdnNetworkPolicy)
+					if err != nil {
+						return err
+					}
 					networkPolicy := networking.NetworkPolicy{}
-					err := k8sClient.Get(ctx, nn, &networkPolicy)
+					err = k8sClient.Get(ctx, nn, &networkPolicy)
 					if err != nil {
 						return err
 					}
@@ -229,6 +255,23 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					}
 					if total != len(expectedIPs) {
 						return errors.New("Some expected IPs are not present in the NetworkPolicy")
+					}
+					total = 0
+					for _, dc := range fqdnNetworkPolicy.Status.Cache {
+						for ip, expires := range dc.IPExpiration {
+							total += 1
+							if !containsString(expectedIPs, ip) {
+								return errors.New("Unexpected IP in FQDNNetworkPolicy Cache: " + ip +
+									". Expected IPs: " + fmt.Sprint(expectedIPs))
+							}
+							expiresIn := expires.Sub(now)
+							if (expiresIn - time.Hour).Abs() > time.Second*time.Duration(5) {
+								return fmt.Errorf("Unexpected IP expiration time: expected 1h; got %v", expiresIn)
+							}
+						}
+					}
+					if total != len(expectedIPs) {
+						return errors.New("Some expected IPs are not present in the FQDNNetworkPolicy Cache")
 					}
 					return nil
 				}).Should(Succeed())
@@ -288,7 +331,7 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 				}
 			})
 		})
-		Context("when a NetworkPolicy with no controller ownerReference already exists", func() {
+		Context("when a NetworkPolicy with no controller ownerReference already exists and there are some IPs in the FQDNNetworkPolicy cache", func() {
 			ctx := context.Background()
 			fqdnNetworkPolicy := getFQDNNetworkPolicy("context3", "default")
 			networkPolicy := getNetworkPolicy(fqdnNetworkPolicy.Name, fqdnNetworkPolicy.Namespace)
@@ -296,10 +339,28 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 				Namespace: fqdnNetworkPolicy.Namespace,
 				Name:      fqdnNetworkPolicy.Name,
 			}
+			domain := fqdnNetworkPolicy.Spec.Egress[0].To[0].FQDNs[0]
 			It("Should adopt the NetworkPolicy and be in the Active state", func() {
 				Expect(k8sClient.Create(ctx, &networkPolicy)).Should(Succeed())
 				Expect(k8sClient.Create(ctx, &fqdnNetworkPolicy)).Should(Succeed())
 				time.Sleep(TIMEOUT)
+				Expect(k8sClient.Get(ctx, nn, &fqdnNetworkPolicy)).Should(Succeed())
+				nextSync := metav1.NewTime(time.Now().Add(-time.Minute))
+				fqdnNetworkPolicy.Status.Cache = map[string]*networkingv1alpha4.DomainCache{
+					domain: {
+						NextUpdateTime: nextSync,
+						IPExpiration: map[string]metav1.Time{
+							"10.0.0.1/32":  metav1.NewTime(time.Now().Add(time.Minute)),
+							"::1/128":      metav1.NewTime(time.Now().Add(time.Minute)),
+							"127.0.0.1/32": metav1.NewTime(time.Now().Add(-time.Minute)), // expired
+						},
+					},
+				}
+				fqdnNetworkPolicy.Status.NextSyncTime = &nextSync
+				Expect(k8sClient.Status().Update(ctx, &fqdnNetworkPolicy)).Should(Succeed())
+				Expect(k8sClient.Get(ctx, nn, &fqdnNetworkPolicy)).Should(Succeed())
+				time.Sleep(TIMEOUT)
+
 				networkPolicy := networking.NetworkPolicy{}
 				Expect(k8sClient.Get(ctx, nn, &networkPolicy)).Should(Succeed())
 				tr := true
@@ -318,6 +379,85 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 						"State: " + string(fqdnNetworkPolicy.Status.State) + ", " +
 						"Reason: " + string(fqdnNetworkPolicy.Status.Reason))
 				}
+				expectedIPsTest := func() error {
+					r := net.Resolver{}
+					// computing the expected IPs in the NetworkPolicy
+					// from the FQDNs in the FQDNNetworkPolicy
+					// We use a different lib for resolving than the one in the main code
+					expectedIPs := []string{"10.0.0.1/32", "::1/128"}
+					for _, fer := range fqdnNetworkPolicy.Spec.Egress {
+						for _, from := range fer.To {
+							for _, fqdn := range from.FQDNs {
+								ip4s, err := r.LookupIP(ctx, "ip4", fqdn)
+								if err != nil {
+									continuing := false
+									derr, ok := err.(*net.DNSError)
+									if ok && derr.IsNotFound {
+										continuing = true
+									}
+									aerr, ok := err.(*net.AddrError)
+									if ok && aerr.Err == "no suitable address found" {
+										continuing = true
+									}
+									if !continuing {
+										return err
+									}
+								}
+								for _, ip := range ip4s {
+									expectedIPs = append(expectedIPs, ip.String()+"/32")
+								}
+								ip6s, err := r.LookupIP(ctx, "ip6", fqdn)
+								if err != nil {
+									continuing := false
+									derr, ok := err.(*net.DNSError)
+									if ok && derr.IsNotFound {
+										continuing = true
+									}
+									aerr, ok := err.(*net.AddrError)
+									if ok && aerr.Err == "no suitable address found" {
+										continuing = true
+									}
+									if !continuing {
+										return err
+									}
+								}
+								for _, ip := range ip6s {
+									expectedIPs = append(expectedIPs, ip.String()+"/128")
+								}
+							}
+						}
+					}
+					total := 0
+					for _, egressRule := range networkPolicy.Spec.Egress {
+						// checking that every CIDR in the NetworkPolicy
+						// is in the expect list of IPs
+						total += len(egressRule.To)
+						for _, to := range egressRule.To {
+							if !containsString(expectedIPs, string(to.IPBlock.CIDR)) {
+								return errors.New("Unexpected IP in NetworkPolicy: " + string(to.IPBlock.CIDR) +
+									". Expected IPs: " + fmt.Sprint(expectedIPs))
+							}
+						}
+					}
+					if total != len(expectedIPs) {
+						return errors.New("Some expected IPs are not present in the NetworkPolicy.")
+					}
+					total = 0
+					for _, dc := range fqdnNetworkPolicy.Status.Cache {
+						for ip := range dc.IPExpiration {
+							total += 1
+							if !containsString(expectedIPs, ip) {
+								return errors.New("Unexpected IP in FQDNNetworkPolicy Cache: " + ip +
+									". Expected IPs: " + fmt.Sprint(expectedIPs))
+							}
+						}
+					}
+					if total != len(expectedIPs) {
+						return errors.New("Some expected IPs are not present in the FQDNNetworkPolicy Cache")
+					}
+					return nil
+				}
+				Expect(expectedIPsTest()).Should(Succeed())
 			})
 		})
 		Context("when the NetworkPolicy has the aaaa-lookups annotation set to skip", func() {
@@ -331,6 +471,7 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 			}
 			It("Shouldn't lookup AAAA records", func() {
 				Expect(k8sClient.Create(ctx, &fqdnNetworkPolicy)).Should(Succeed())
+				now := time.Now()
 				Eventually(func() error {
 					networkPolicy := networking.NetworkPolicy{}
 					return k8sClient.Get(ctx, nn, &networkPolicy)
@@ -367,9 +508,13 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 							}
 						}
 					}
-					// Getting the NetworkPolicy
+					// Getting the NetworkPolicy and updated FQDNNetworkPolicy
+					err := k8sClient.Get(ctx, nn, &fqdnNetworkPolicy)
+					if err != nil {
+						return err
+					}
 					networkPolicy := networking.NetworkPolicy{}
-					err := k8sClient.Get(ctx, nn, &networkPolicy)
+					err = k8sClient.Get(ctx, nn, &networkPolicy)
 					if err != nil {
 						return err
 					}
@@ -393,6 +538,23 @@ var _ = Describe("FQDNNetworkPolicy controller", func() {
 					}
 					if total != len(expectedIPs) {
 						return errors.New("Some expected IPs are not present in the NetworkPolicy")
+					}
+					total = 0
+					for _, dc := range fqdnNetworkPolicy.Status.Cache {
+						for ip, expires := range dc.IPExpiration {
+							total += 1
+							if !containsString(expectedIPs, ip) {
+								return errors.New("Unexpected IP in FQDNNetworkPolicy Cache: " + ip +
+									". Expected IPs: " + fmt.Sprint(expectedIPs))
+							}
+							expiresIn := expires.Sub(now)
+							if (expiresIn - time.Hour).Abs() > time.Second*time.Duration(5) {
+								return fmt.Errorf("Unexpected IP expiration time: expected 1h; got %v", expiresIn)
+							}
+						}
+					}
+					if total != len(expectedIPs) {
+						return errors.New("Some expected IPs are not present in the FQDNNetworkPolicy Cache")
 					}
 					return nil
 				}).Should(Succeed())
