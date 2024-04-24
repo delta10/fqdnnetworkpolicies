@@ -1,48 +1,39 @@
-# Maintained by NAIS
+# Stable FQDNNetworkPolicies
 
-NAIS, is currently actively managing a fork of the project found at the following GitHub repository.
-The primary reason for maintaining this forked repository is that the alternative solution provided by Google Cloud Platform has not yet been officially priced or made available. 
-Therefore, NAIS has opted to take control of the project and adapt it to suit other requirements and needs.
+<!--toc:start-->
+- [Stable FQDNNetworkPolicies](#stable-fqdnnetworkpolicies)
+  - [Description](#description)
+    - [Why this project is needed](#why-this-project-is-needed)
+    - [How it works](#how-it-works)
+    - [Internals](#internals)
+    - [Achieving Stable FQDNNetworkPolicies](#achieving-stable-fqdnnetworkpolicies)
+    - [Alternative solutions](#alternative-solutions)
+    - [Differences with Google's FQDNNetworkPolicies](#differences-with-googles-fqdnnetworkpolicies)
+  - [Deployment and configuration](#deployment-and-configuration)
+    - [Command line options](#command-line-options)
+    - [Installation with Helm](#installation-with-helm)
+    - [Local testing](#local-testing)
+    - [CoreDNS](#coredns)
+<!--toc:end-->
 
-By managing this forked repository, NAIS ensures that they can tailor the project to align with objectives and operational requirements effectively. 
-This proactive approach allows NAIS to address needs and maintain control over the project's development, rather than waiting for a solution that may not be readily available or suitable.
+## Description
+FQDNNetworkPolicies are like Kubernetes NetworkPolicies, but they allow the user to specify domain names instead of CIDR IP ranges and podSelectors. The controller takes care of resolving the domain names to a list of IP addresses using the cluster's DNS servers.
 
-A publicly available image is pushed with every commit to `main` for now, and can be found at [fqdn-policy image](https://github.com/orgs/nais/packages?repo_name=fqdn-policy). 
+This project is a fork of [Google's FQDNNetworkPolicies](https://github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang). Unlike that project, Stable FQDNNetworkPolicies are safe to use with hosts that dynamically return different A records on subsequent requests, especially if used in combination with the [k8s_cache plugin](https://github.com/delta10/k8s_cache) for CoreDNS. This plugin lets our controller update the NetworkPolicies before the Cluster's DNS cache expires. Without the plugin, a small percentage of requests to domains with dynamic DNS responses will fail ([see below](#achieving-stable-fqdnnetworkpolicies)).
 
-SBOM is generated with [cyclonedx](https://github.com/CycloneDX), image is signed and attested using [cosign](https://github.com/sigstore/cosign).
+### Why this project is needed 
 
-You can validate the image attestations by executing the following commands:
+Kubernetes [NetworkPolicies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) can be used to allow or block ingress and egress traffic to parts of the cluster. While NetworkPolicies support allowing and blocking IP ranges, there is no support for hostnames. Such a feature is particularly useful for those who want to block all egress traffic except for a couple of whitelisted hostnames.
 
-```
-echo IDENTITY=https://github.com/nais/fqdn-policy/.github/workflows/main.yaml@refs/heads/main
-echo ISSUER=https://token.actions.githubusercontent.com
-cosign verify-attestation --type=cyclonedx --certificate-oidc-issuer=$ISSUER --certificate-identity=$IDENTITY ghcr.io/nais/fqdn-policy@sha256:xxx
-```
+Existing solutions all have their [limitations](#alternative-solutions). There is a need for a simple solution based on DNS, that does not require a proxy nor altering DNS records and that works for any type of traffic (not just HTTPS). This solution should also be stable for domains with dynamic DNS reponses.
 
-# 🚨 Warning 🚨
-
-This project is now archived. There is a new official preview feature for FQDN Network Policies built into Google
-Kubernetes Engine: [Control Pod egress traffic using FQDN network policies](https://cloud.google.com/kubernetes-engine/docs/how-to/fqdn-network-policies).
-While it has the same apiVersion and kind as the API of this project, it is **NOT** the same thing as this project (which is not an official Google product). We don't guarantee any compatibility between this project and the official GKE feature.
-
-We strongly encourage you to migrate to the new official feature. This project remains available if you want to use it as-is, or fork it.
-
-# FQDNNetworkPolicies
-
-FQDNNetworkPolicies let you create Kubernetes Network Policies based on Fully
-Qualified Domain Names(FQDNs) in addition to the standard functionality that
-only allows IP address ranges (CIDR ranges). This implementation uses a custom
-resource definition (CRD) and a controller inside the Kubernetes cluster that
-periodically polls the DNS service and emits a NetworkPolicy object for every FQDNNetworkPolicy
-object. 
-
-## How does it work?
+### How it works
 
 A FQDNNetworkPolicy looks a lot like a NetworkPolicy, but you can configure hostnames
 in the "to" field:
 
 ```
-apiVersion: networking.gke.io/v1alpha3
+apiVersion: networking.delta10.nl/v1alpha4
 kind: FQDNNetworkPolicy
 metadata:
   name: example
@@ -63,178 +54,109 @@ When you create this FQDNNetworkPolicy, the controller will in turn create a cor
 the same name, in the same namespace, that has the same `podSelector`, the same ports, but replacing
 the hostnames with corresponding IP addresss it received by polling.
 
-We recommend the use of [NodeLocal DNSCache](https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/) to improve stability of records and reduce the number of DNS requests sent outside of the cluster.
+### Internals 
 
-**Note**: Just like with normal network policies, once specific pods are selected,
-   all not explicitly allowed traffic is denied. Since FQDNNetworkPolicies are
-   egress policies, we recommend to explicitly allow DNS traffic to allow name
-   resolution. See
-   [Kubernetes Network Policy Recipes](https://github.com/ahmetb/kubernetes-network-policy-recipes/blob/master/11-deny-egress-traffic-from-an-application.md#allowing-dns-traffic)
+On each reconciliation of a FQDNNetworkPolicy, the controller first queries the API server for endpoints of the DNS service (by default kube-dns in namespace kube-system). It adds each endpoint to its list of DNS servers (but not the service ClusterIP). It then queries each DNS server for A records for each of the domains in the FQDNNetworkPolicy. (It is necessary to query all servers, since each server has its own internal cache.)
 
-### Annotations
+The resolved IP addressess are used to create a NetworkPolicy with the same name. Each IP address is also stored in a cache within the FQDNNetworkPolicy's `status` field, along with an expiration time based on the value of `-ip-expiration-period`. When an IP address expires and is not encountered again it gets removed from the cache and the NetworkPolicy.
 
-There are 2 annotations to know when working with FQDNNetworkPolicies.
+The FQDNNetworkPolicy is requeued for reconciliation based on the earliest TTL from all records it received.
 
-If a NetworkPolicy has been created by a FQDNNetworkPolicy, it has the `fqdnnetworkpolicies.networking.gke.io/owned-by`
-set to the name of the FQDNNetworkPolicy. If, when you create a FQDNNetworkPolicy, a NetworkPolicy with the same name
-already exists, then the FQDNNetworkPolicy will not do anything. You can have the FQDNNetworkPolicy "adopt" the
-NetworkPolicy by manually setting the `fqdnnetworkpolicies.networking.gke.io/owned-by` to the right value on the
-NetworkPolicy.
+### Achieving Stable FQDNNetworkPolicies
 
-By default, the NetworkPolicy associated with a FQDNNetworkPolicy gets deleted when you delete the FQDNNetworkPolicy.
-To prevent this behavior, set the `fqdnnetworkpolicies.networking.gke.io/delete-policy` annotation to `abandon` on the
-NetworkPolicy.
+Normally, whenever a DNS server in the cluster clears it cache, there is a period of about 2 seconds when NetworkPolicies are not yet updated with the new IP addresses. This means that connection attempts to these hostnames might fail for about 2 seconds. This problem can be solved by using the [k8s_cache plugin](https://github.com/delta10/k8s_cache) in combination with Stable FQDNNetworkPolicies.
 
-You can disable AAAA lookups for an FQDNNetworkPolicy by setting the `fqdnnetworkpolicies.networking.gke.io/aaaa-lookups` annotation to `skip`. The resulting NetworkPolicy will not contain any IPv6 addresses.
+Without the plugin, a small percentage of requests to hosts with dynamic DNS responses may fail. In my testing with `-ip-expiration-period` set to "12h", requests to www.google.com eventually have a failure rate of around 0%. However, in the first 10 minutes, the failure rate is about 1%.
 
-## Limitations
+When not using k8s_cache, there are a few things you can do to reduce the amount of connection failures:
+- Ensure that all pods in the cluster use a caching DNS server. The instances of this server should be endpoints of a Kubernetes service. The controller should be configured to use this service ([see options](#command-line-options)).
+- Make sure that the DNS server sends the remaining cache duration as TTL, which is the default in CoreDNS (see the `keepttl` option [in CoreDNS](https://coredns.io/plugins/cache/)).
+- Increase the cache duration of the DNS server ([see below](#coredns)).
+- Set a higher IPExpiration (see [Comand line options](#command-line-options)). This is the amount of time that IPs are retained in the NetworkPolicy since they were last seen in a DNS response.
 
-There are a few functional limitations to FQDNNetworkPolicies:
+### Alternative solutions
+- [egress-operator](https://github.com/monzo/egress-operator) by Monzo. A very smart solution that runs a Layer 4 proxy for each whitelisted domain name. However, you need to run a proxy pod for each whitelisted domain, and you need to install a CoreDNS plugin to redirect traffic to the proxies. See also their [blog post](https://github.com/monzo/egress-operator).
+- [FQDNNetworkPolicies](https://github.com/GoogleCloudPlatform/gke-fqdnnetworkpolicies-golang), of which this project is a fork. The GKE project is no longer maintained, but [there is a close fork here](https://github.com/nais/fqdn-policy). The GKE FQDNNetworkPolicies do not work well for domains whose A records change dynamically. [See below](#differences-with-googles-fqdnnetworkpolicies) for a list of differences.
+- Service meshes such as Istio ([see docs](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-control)) can be used to create an HTTPS egress proxy that only allows traffic to certain hostnames. Such a solution does not use DNS at all but TLS SNI (Server Name Indication). However, it can only be used for HTTPS traffic.
+- Some network plugins have a DNS-based solution, like CiliumNetworkPolicies ([see docs](https://docs.cilium.io/en/stable/security/policy/language/#dns-based)).
+- There is a [proposal](https://github.com/kubernetes-sigs/network-policy-api/blob/main/npeps/npep-133.md) to extend the NetworkPolicy API with an FQDN selector.
 
-* Only *hostnames* are supported. In particular, you can't configure a FQDNNetworkPolicy with:
-  * IP addresses or CIDR blocks. Use NetworkPolicies directly for that.
-  * wildcard hostnames like `*.example.com`.
-* Only A, AAAA, and CNAME records are supported.
-  * Google Cloud VPCs and GKE do not currently support IPv6, so AAAA records are not relevant in their context.
-* Records defined in the `/etc/hosts` file are not supported. Those records are probably static, so we recommend you use
-  a normal `NetworkPolicy` for them.
-* When using an [IDN](https://en.wikipedia.org/wiki/Internationalized_domain_name),
-  use the punycode equivalent as the locale used inside the controller might not
-  be compatible with your locale.
+### Differences with Google's FQDNNetworkPolicies
+- IP addresses are cached so that they remain in a NetworkPolicy for a while when they are no longer resolved.
+- We use the `kube-dns` service to query *all* DNS servers in the cluster, instead of only one.
+- We do not use a webhook to delete NetworkPolicies when FQDNNetworkPolicies are deleted. Instead we set (controller) ownerReferences so the API server takes care of garbage collection.
+- The owned-by annotation is removed. If a NetworkPolicy with the same name exists, then the FQDNNetworkPolicy will adopt it unless another controller manages it.
+- The delete-policy annotation is removed. You can achieve similar behavior using `kubectl delete --cascade=orphan`.
 
-### Use case limitations
+## Deployment and configuration
+### Command line options
+| Option                       | Type     | Description                                                                                                         | Default                 |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `-dns-config-file`           | string   | Path to the DNS configuration file.                                                                                 | "/etc/resolv.conf"      |
+| `-dns-environment`           | string   | Specify 'kubernetes' to configure DNS via a Kubernetes service or 'resolv.conf' to use a config file.               | "kubernetes"            |
+| `-dns-service-name`          | string   | Upstream DNS service in kube-dns namespace (requires `--dns-environment=kubernetes`)                                | "kube-dns"              |
+| `-dns-tcp`                   | flag     | Use DNS over TCP instead of UDP.                                                                                    | false                   |
+| `-health-probe-bind-address` | string   | The address the probe endpoint binds to.                                                                            | ":8081"                 |
+| `-ip-expiration-period`      | string   | Minimum duration to keep resolved IPs in a NetworkPolicy                                                            | "60m"                   |
+| `-kubeconfig`                | string   | Paths to a kubeconfig. Only required if out-of-cluster.                                                             |                         |
+| `-leader-elect`              | flag     | Enable leader election for controller manager.                                                                      | false                   |
+| `-metrics-bind-address`      | string   | The address the metric endpoint binds to.                                                                           | ":8080"                 |
+| `-next-sync-period`          | int      | Maximum values in seconds for the re-sync time on the FQDNNetworkPolicy, respecting the DNS TTL.                    | 3600                    |
+| `-skip-aaaa`                 | flag     | Skip AAAA lookups                                                                                                   | false                   |
+| `-zap-devel`                 | flag     | Enable development mode defaults (encoder=consoleEncoder, logLevel=Debug, stackTraceLevel=Warn)                     | false                   |
+| `-zap-encoder`               | string   | Zap log encoding ('json' or 'console')                                                                              | "json" |
+| `-zap-log-level`             | string   | Zap Level to configure the verbosity of logging. Can be one of 'debug', 'info', 'error', or any integer value > 0   | "info" |
+| `-zap-stacktrace-level`      | string   | Zap Level at and above which stacktraces are captured (one of 'info', 'error', 'panic').                            | "error" |
+| `-zap-time-encoding`         | string   | Zap time encoding ('epoch', 'millis', 'nano', 'iso8601', 'rfc3339', 'rfc3339nano').                                 | 'epoch'                 |
 
-The current controller implementation polls all domains from a single controller
-instance in the Kubernetes cluster and repolls records after the TTL of the
-first record expires. This leads to the following use case limitations in the
-current implementation:
-
--  Since traffic blocking is implemented using existing Network Policies,
-   FQDNNetworkPolicies is not a Layer 7 firewall but only blocks traffic based
-   on IP addresses. If you need actual traffic filtering based on specific
-   domains, use a proxy-based solution or consider
-   [Egress gateways](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway/)
-   in Istio for traffic filtering. An example where Layer 7 firewall behaviour
-   differs from NetworkPolicies is when multiple hosts are using the same IP
-   address - this implementation allows all of them as soon as one host is allowed.
--  The current implementation does not intercept actual pod DNS requests
-   unlike CNI based solutions such as
-   [CiliumNetworkPolicy](https://docs.cilium.io/en/v1.9/concepts/kubernetes/policy/#ciliumnetworkpolicy).
-   It relies on the controller to update the NetworkPolicy based on results of
-   polling and repolling after TTL expires. Since there might be conditions where the new IP address is not yet allowed by NetworkPolicy, the use of  [exponential backoff](https://en.wikipedia.org/wiki/Exponential_backoff) when connecting is recommended.
--  Since polling is currently only done on a single host, don't use the
-   current implementation for allowing access to hosts that dynamically return
-   different A records on subsequent requests, as different hosts might get
-   different results and results might not be cached. Examples of such dynamic
-   hosts are www.google.com, www.googleapis.com www.facebook.com and services
-   behind AWS Route53 or Elastic Load Balancing. 
--  The use of
-   [NodeLocal DNSCache](https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/)
-   is recommend to improve stability of records and reduce the number of DNS
-   requests sent outside of the cluster 
--  For allowing traffic to Google APIs on Google Cloud, use a
-   [Private Google Access](https://cloud.google.com/vpc/docs/configure-private-google-access)
-   option instead and
-   [configure DNS accordingly](https://cloud.google.com/vpc/docs/configure-private-google-access#config-domain).
-   Then allow the respective IP addresses using a Standard Network Policy
-
-An upcoming controller implementation will optionally poll all domains on each
-node in the cluster, which together with
-[NodeLocal DNSCache](https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/)
-can improve stability for dynamic hosts.
-
-## Installation
-
-Follow these instructions to install the FQDNNetworkPolicies controller in your GKE cluster.
-
-1. Install [cert-manager](https://cert-manager.io/docs/installation/kubernetes/).
-
-   ```
-   kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.11.0/cert-manager.yaml
-   ```
-
-1. Install the FQDNNetworkPolicy controller.
-
-   ```
-   export VERSION=$(curl https://storage.googleapis.com/fqdnnetworkpolicies-manifests/latest)
-   kubectl apply -f https://storage.googleapis.com/fqdnnetworkpolicies-manifests/${VERSION}.yaml
-   ```
-
-## Upgrades
-
-Upgrading in place from the `v1alpha1` API (used in the 0.1 release) to the
-`v1alpha2` (introduced in the 0.2 release) is not supported. You'll need to
-uninstall the controller, reinstall it, update your FQDNNetworkPolicies to the
-`v1alpha2` API and recreate them.
-
-In the same manner, upgrading in place from the `v1alpha2` API (used in the 0.2 release) to the
-`v1alpha3` (introduced in the 0.3 release) is not supported. You'll need to
-uninstall the controller, reinstall it, update your FQDNNetworkPolicies to the
-`v1alpha3` API and recreate them.
-
-## Uninstall
-
-To uninstall the FQDNNetworkPolicies controller from your GKE cluster, delete the FQDNNetworkPolicies first,
-and then remove the resources.
-Replace `YOUR_VERSION` by the version you are using.
-
+### Installation with Helm
+To install with Helm:
+```sh
+helm install --namespace fqdnnetworkpolicies fqdnnetworkpolicies --repo https://delta10.github.io/fqdnnetworkpolicies fqdnnetworkpolicies
 ```
-export VERSION=YOUR_VERSION
-kubectl delete fqdnnetworkpolicies.networking.gke.io -A --all
-kubectl delete -f https://storage.googleapis.com/fqdnnetworkpolicies-manifests/${VERSION}.yaml
+This should install the CRDs and controller. After installation, check the logs of the controller-manager running in the `fqdnnetworkpolicies` namespace.
+
+### Local testing
+
+To run the controller locally (outside of a cluster), make sure you have a kubeconfig set up to access the API server of a cluster. As DNS servers, you can use the local `/etc/resolv.conf` using the option `-dns-environment resolv.conf`. To use the cluster DNS servers, you can use `kubectl port-forward` to access the cluster's DNS servers locally. Create a separate `resolv.conf` containing the local addresses of the cluster DNS servers and run the controller with `-dns-tcp`, `-dns-environment resolv.conf` and `-dns-config-file [path/to/resolv.conf]`.
+
+To install the CRDs one the cluster, compile and run the controller, execute
+```bash
+make run
 ```
 
-## Development
+Example of using `kubectl port-forward`:
+```bash
+kubectl -n kube-system port-forward pod/coredns-xxx --address=127.0.0.1 53:53
+kubectl -n kube-system port-forward pod/coredns-yyy --address=127.0.0.2 53:53
+# etc
+```
 
-This project is built with [kubebuilder](https://book.kubebuilder.io/introduction.html).
-We recommend using [Kind](https://kind.sigs.k8s.io/docs/user/quick-start/) for your development environment.
+### CoreDNS
 
-### Prerequisites
-You need the following tools installed on your development workstation.
-* Docker
-* kubectl
-* Kind
-* kustomize
-* kubebuilder (3.5.0, you may need to export the [KUBEBUILDER_ASSET variable](https://book.kubebuilder.io/quick-start.html))
+It is best to setup CoreDNS with k8s_cache instead of cache. For instructions see [k8s_cache](https://github.com/delta10/k8s_cache).
 
-### Building and running locally
+If you are not using k8s_cache, stability might improve if you increase the cache for external domains. For example:
 
-1. Create your Kind cluster.
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns
+  namespace: kube-system
+data:
+  Corefile: |
+    .:53 {
+    ...
+        cache 3600
+    ...
+    }
+    cluster.local:53 {
+    ...
+        cache 30
+    ...
+    }
+```
 
-    ```
-    make kind-cluster
-    ```
-
-1. Deploy cert-manager (necessary for the webhooks).
-
-   ```
-   make deploy-cert-manager
-   ```
-
-1. Build & deploy the controller. This will delete any previous controller pod running, even if it has the same tag.
-
-   ```
-   make force-deploy-manager
-   ```
-
-1. Observe the controller logs and apply valid and invalid resources.
-
-   ```
-   # In one terminal
-   make follow-manager-logs
-   # In another terminal
-   kubectl apply -f config/samples/networking_v1alpha3_fqdnnetworkpolicy_invalid.yaml
-   kubectl apply -f config/samples/networking_v1alpha3_fqdnnetworkpolicy_valid.yaml
-   ```
-
-1. Explore the Makefile for other available commands, and read the [kubebuilder book](https://book.kubebuilder.io/introduction.html).
-
-### Creating a release
-
-1. Tag the commit you want to mark as a release. We follow semantic versioning.
-1. Push the tag to GitHub.
-1. Create a release in GitHub.
-1. If you want that release to be the new default one, run:
-   ```
-   VERSION=$YOUR_TAG make latest
-   ```
+### Migration from Google's FQDNNetworkPolicies
+We use a new API group and version (`networking.delta10.nl/v1alpha4`), but the `spec` field is unchanged. Hence, you can copy your existing FQDNNetworkPolicies and change only the `apiVersion`. If you want to use Google's FQDNNetworkPolicies in combination with Stable FQDNNetworkPolicies during a transition period, you need to choose different names (`metadata.name`) for the old and new policies.

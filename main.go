@@ -69,7 +69,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&skipAAAA, "skip-aaaa", false, "Skip AAAA lookups")
-	flag.IntVar(&nextSyncPeriod, "next-sync-period", 3600, "Highest value possible for the re-sync time on the FQDNNetworkPolicy, respecting the DNS TTL.")
+	flag.IntVar(&nextSyncPeriod, "next-sync-period", 3600, "Maximum values in seconds for the re-sync time on the FQDNNetworkPolicy, respecting the DNS TTL.")
 	flag.StringVar(&dnsEnvironment, "dns-environment", "kubernetes", "specify 'kubernetes' to configure DNS via a Kubernetes service or 'resolv.conf' to use a configuration file.")
 	flag.StringVar(&dnsConfigFile, "dns-config-file", "/etc/resolv.conf", "Path to the DNS configuration file.")
 	flag.BoolVar(&dnsTCP, "dns-tcp", false, "Use DNS over TCP instead of UDP.")
