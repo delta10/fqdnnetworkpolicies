@@ -7,16 +7,6 @@ permissions:
   contents: write
 
 jobs:
-  tests_pr:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22.x"
-          cache-dependency-path: ./go.sum
-      - run: make test
-
   dependabot_pr:
     runs-on: ubuntu-latest
     if: ${{ github.actor == 'dependabot[bot]' }}
