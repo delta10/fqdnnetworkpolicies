@@ -14,6 +14,7 @@
     - [Installation with Helm](#installation-with-helm)
     - [Local testing](#local-testing)
     - [CoreDNS](#coredns)
+    - [Migration from Google's FQDNNetworkPolicies](#migration-from-googles-fqdnnetworkpolicies)
 <!--toc:end-->
 
 ## Description
