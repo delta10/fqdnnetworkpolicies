@@ -17,4 +17,6 @@ jobs:
           go-version-file: go.mod
 
       - name: Test
-        run: make test
+        run: |
+          go mod tidy
+          make test
